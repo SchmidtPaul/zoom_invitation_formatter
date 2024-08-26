@@ -13,18 +13,26 @@ parse_german_date <- function(date_string) {
     date_string <- str_replace(date_string, german_months[i], english_months[i])
   }
   
-  parsed_date <- parse_date_time(date_string, orders = c("d.b Y", "d.b Y H:M p"))
+  parsed_date <- parse_date_time(date_string, orders = c("d.b Y H:M p", "d.b Y"))
   return(parsed_date)
 }
 
 # UI Definition
 ui <- fluidPage(
-  titlePanel("Text Processor"),
+  titlePanel("Zoom Invite Processor"),
   
   sidebarLayout(
     sidebarPanel(
+      helpText(
+        "Paste the text automatically provided by zoom for each meeting.",
+        "You can find your scheduled meetings ", 
+        a("here", href = "https://us02web.zoom.us/meeting#/upcoming", target = "_blank"),
+        "."
+      ),
       textAreaInput("textInput", "Paste your text here:", rows = 10),
       textInput("endTime", "Enter end time (HH:MM)", value = ""),
+      textInput("lecturerName", "Name of lecturer", value = "Dr. Paul Schmidt"),
+      textAreaInput("additionalInfo", "Additional Info at the end", value = "Hinweise zur Vorbereitung\nhttps://schmidtpaul.github.io/dsfair_quarto/ch/misc/workshopprep.html", rows = 3),
       br(), br()
     ),
     
@@ -78,14 +86,27 @@ server <- function(input, output) {
     jeden_tag_line <- lines[grep("^\\s+Jeden Tag,", lines)]
     
     start_date_time <- str_extract(zeit_line, "\\d+\\.\\w+\\.\\s+\\d{4}\\s+\\d{2}:\\d{2}\\s+[AP]M")
-    end_date <- str_extract(jeden_tag_line, "\\d+\\.\\w+\\.\\s+\\d{4}")
     
     parsed_start <- parse_german_date(start_date_time)
-    parsed_end <- parse_german_date(end_date)
-    
     start_date <- format(parsed_start, "%d. %b. %Y")
-    end_date <- format(parsed_end, "%d. %b. %Y")
-    start_time <- format(parsed_start, "%I:%M %p")
+    start_time <- format(parsed_start, "%H:%M")
+    
+    # Format date for filename
+    file_date <- format(parsed_start, "%Y%m%d")
+    
+    # Check if it's a multi-day event
+    is_multi_day <- length(jeden_tag_line) > 0
+    
+    if (is_multi_day) {
+      end_date <- str_extract(jeden_tag_line, "\\d+\\.\\w+\\.\\s+\\d{4}")
+      parsed_end <- parse_german_date(end_date)
+      end_date <- format(parsed_end, "%d. %b. %Y")
+      date_string_de <- sprintf("Tage: %s - %s", start_date, end_date)
+      date_string_en <- sprintf("Days: %s - %s", start_date, end_date)
+    } else {
+      date_string_de <- sprintf("Datum: %s", start_date)
+      date_string_en <- sprintf("Date: %s", start_date)
+    }
     
     # Extract URL
     url_line <- lines[grep("^https://", lines)]
@@ -99,34 +120,33 @@ server <- function(input, output) {
     kenncode <- str_trim(sub("^Kenncode:\\s*", "", kenncode_line))
     
     formatted_content_de <- paste(
-      "Dr. Paul Schmidt lädt Sie zu einem geplanten Zoom-Meeting ein.\n\n",
+      sprintf("%s lädt Sie zu einem geplanten Zoom-Meeting ein.\n\n", input$lecturerName),
       sprintf("Workshop: %s\n", workshop_title),
-      sprintf("Tage: %s - %s\n", start_date, end_date),
-      sprintf("Zeit: %s- %s\n\n", start_time, input$endTime),
+      sprintf("%s\n", date_string_de),
+      sprintf("Zeit: %s - %s\n\n", start_time, input$endTime),
       "Beitreten Zoom Meeting\n",
       sprintf("%s\n\n", url),
       sprintf("Meeting-ID: %s\n", meeting_id),
       sprintf("Kenncode: %s\n\n", kenncode),
-      "Hinweise zur Vorbereitung\n",
-      "https://schmidtpaul.github.io/dsfair_quarto/ch/misc/workshopprep.html",
+      input$additionalInfo,
       sep = ""
     )
     
     formatted_content_en <- paste(
-      "Dr. Paul Schmidt is inviting you to a planned zoom meeting.\n\n",
+      sprintf("%s is inviting you to a planned zoom meeting.\n\n", input$lecturerName),
       sprintf("Workshop: %s\n", workshop_title),
-      sprintf("Days: %s - %s\n", start_date, end_date),
-      sprintf("Time: %s- %s\n\n", start_time, input$endTime),
+      sprintf("%s\n", date_string_en),
+      sprintf("Time: %s - %s\n\n", start_time, input$endTime),
       "Join zoom meeting\n",
       sprintf("%s\n\n", url),
       sprintf("Meeting-ID: %s\n", meeting_id),
       sprintf("Code: %s\n\n", kenncode),
-      "Preparation notes\n",
-      "https://schmidtpaul.github.io/dsfair_quarto/ch/misc/workshopprep.html",
+      input$additionalInfo,
       sep = ""
     )
     
-    list(de = formatted_content_de, en = formatted_content_en)
+    list(de = formatted_content_de, en = formatted_content_en, 
+         file_date = file_date, workshop_title = workshop_title)
   })
   
   output$contents <- renderText({ originalContent() })
@@ -135,7 +155,9 @@ server <- function(input, output) {
   
   output$downloadGerman <- downloadHandler(
     filename = function() {
-      paste("Zoom Meeting Einladung.txt")
+      content <- editedContent()
+      sanitized_title <- gsub("[^[:alnum:]]", "_", content$workshop_title)
+      paste0("ZoomEinladung_", content$file_date, "_", sanitized_title, ".txt")
     },
     content = function(file) {
       cat(editedContent()$de, file = file)
@@ -144,7 +166,9 @@ server <- function(input, output) {
   
   output$downloadEnglish <- downloadHandler(
     filename = function() {
-      paste("Zoom meeting invitation.txt")
+      content <- editedContent()
+      sanitized_title <- gsub("[^[:alnum:]]", "_", content$workshop_title)
+      paste0("ZoomInvitation_", content$file_date, "_", sanitized_title, ".txt")
     },
     content = function(file) {
       cat(editedContent()$en, file = file)
